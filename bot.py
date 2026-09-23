@@ -206,10 +206,9 @@ async def ask_gemini(user_id: int, parts: list[types.Part]) -> str:
     history.append(types.Content(role="user", parts=parts))
     trim_history(history)
 
-    models_to_try: list[str] = []
-    for m in [MODEL, "gemini-3.5-flash-lite", "gemini-flash-lite-latest", "gemini-3.5-flash"]:
-        if m and m not in models_to_try:
-            models_to_try.append(m)
+    models_to_try: list[str] = ["gemini-3.5-flash-lite", "gemini-flash-lite-latest"]
+    if MODEL and MODEL not in models_to_try:
+        models_to_try.append(MODEL)
 
     last_error = None
     for model_name in models_to_try:
@@ -367,7 +366,7 @@ async def start_dummy_server() -> None:
             response = (
                 b"HTTP/1.1 200 OK\r\n"
                 b"Content-Type: text/plain\r\n"
-                b"Content-Length: 2\r\n\r\nOK"
+                b"Content-Length: 5\r\n\r\nOK v3"
             )
             writer.write(response)
             await writer.drain()

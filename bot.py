@@ -45,7 +45,7 @@ load_dotenv()
 # --------------------------------------------------------------------------- #
 TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
-MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 SYSTEM_FILE = Path(os.getenv("SYSTEM_INSTRUCTION_FILE", "system_instruction.json"))
 MAX_HISTORY = int(os.getenv("MAX_HISTORY_MESSAGES", "16"))  # oxirgi N ta xabar
 COOLDOWN = float(os.getenv("COOLDOWN_SECONDS", "2"))  # xabarlar orasidagi pauza
@@ -206,22 +206,30 @@ async def ask_gemini(user_id: int, parts: list[types.Part]) -> str:
     history.append(types.Content(role="user", parts=parts))
     trim_history(history)
 
-    try:
-        response = await client.aio.models.generate_content(
-            model=MODEL, contents=history, config=make_config(user_id)
-        )
-        text = (response.text or "").strip()
-    except Exception:
-        history.pop()  # muvaffaqiyatsiz so'rovni tarixdan olib tashlaymiz
-        raise
+    models_to_try: list[str] = []
+    for m in [MODEL, "gemini-3.5-flash-lite", "gemini-flash-lite-latest", "gemini-3.5-flash"]:
+        if m and m not in models_to_try:
+            models_to_try.append(m)
 
-    if not text:
-        history.pop()
-        return "🤔 Javob shakllantira olmadim. Masalani boshqacha yozib, qayta yuborib ko'ring."
+    last_error = None
+    for model_name in models_to_try:
+        try:
+            response = await client.aio.models.generate_content(
+                model=model_name, contents=history, config=make_config(user_id)
+            )
+            text = (response.text or "").strip()
+            if text:
+                history.append(types.Content(role="model", parts=[types.Part.from_text(text=text)]))
+                trim_history(history)
+                return text
+        except Exception as e:
+            last_error = e
+            log.warning("Model %s xato berdi (%s), boshqa modelga o'tilmoqda...", model_name, e)
 
-    history.append(types.Content(role="model", parts=[types.Part.from_text(text=text)]))
-    trim_history(history)
-    return text
+    history.pop()  # muvaffaqiyatsiz bo'lsa tarixdan olib tashlaymiz
+    if last_error:
+        raise last_error
+    return "🤔 Javob shakllantira olmadim. Masalani boshqacha yozib, qayta yuborib ko'ring."
 
 
 def is_allowed(user_id: int) -> bool:
@@ -379,6 +387,22 @@ async def start_dummy_server() -> None:
         log.warning("Port serverini ishga tushirishda xatolik: %s", e)
 
 
+async def keep_alive_task() -> None:
+    url = os.getenv("RENDER_EXTERNAL_URL")
+    if not url:
+        return
+    log.info("Keep-alive faollashtirildi: %s", url)
+    import urllib.request
+    while True:
+        await asyncio.sleep(600)  # har 10 daqiqada
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Render-KeepAlive/1.0"})
+            urllib.request.urlopen(req, timeout=15)
+            log.info("Keep-alive ping muvaffaqiyatli: %s", url)
+        except Exception as e:
+            log.debug("Keep-alive ping xatosi: %s", e)
+
+
 async def post_init(app: Application) -> None:
     await app.bot.set_my_commands(
         [
@@ -389,6 +413,7 @@ async def post_init(app: Application) -> None:
         ]
     )
     await start_dummy_server()
+    asyncio.create_task(keep_alive_task())
 
 
 def main() -> None:

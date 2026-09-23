@@ -349,6 +349,36 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     log.error("Handlerda xatolik", exc_info=context.error)
 
 
+async def start_dummy_server() -> None:
+    port = os.getenv("PORT")
+    if not port:
+        return
+    async def handle_ping(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            await reader.read(1024)
+            response = (
+                b"HTTP/1.1 200 OK\r\n"
+                b"Content-Type: text/plain\r\n"
+                b"Content-Length: 2\r\n\r\nOK"
+            )
+            writer.write(response)
+            await writer.drain()
+        except Exception:
+            pass
+        finally:
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
+
+    try:
+        await asyncio.start_server(handle_ping, "0.0.0.0", int(port))
+        log.info("Render Web Service uchun port ochildi: %s", port)
+    except Exception as e:
+        log.warning("Port serverini ishga tushirishda xatolik: %s", e)
+
+
 async def post_init(app: Application) -> None:
     await app.bot.set_my_commands(
         [
@@ -358,6 +388,7 @@ async def post_init(app: Application) -> None:
             BotCommand("help", "Yordam"),
         ]
     )
+    await start_dummy_server()
 
 
 def main() -> None:

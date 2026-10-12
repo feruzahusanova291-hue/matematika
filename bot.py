@@ -9,10 +9,12 @@ Ishga tushirish:
 
 import asyncio
 import html
+import http.server
 import json
 import logging
 import os
 import re
+import threading
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -43,8 +45,15 @@ load_dotenv()
 # --------------------------------------------------------------------------- #
 # Sozlamalar
 # --------------------------------------------------------------------------- #
-TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+if not TELEGRAM_TOKEN:
+    logging.critical("XATO: TELEGRAM_BOT_TOKEN topilmadi! Render Dashboard -> Environment bo'limiga qo'shing.")
+    raise SystemExit("TELEGRAM_BOT_TOKEN o'rnatilmagan.")
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if not GEMINI_API_KEY:
+    logging.critical("XATO: GEMINI_API_KEY topilmadi! Render Dashboard -> Environment bo'limiga qo'shing.")
+    raise SystemExit("GEMINI_API_KEY o'rnatilmagan.")
 MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 SYSTEM_FILE = Path(os.getenv("SYSTEM_INSTRUCTION_FILE", "system_instruction.json"))
 MAX_HISTORY = int(os.getenv("MAX_HISTORY_MESSAGES", "16"))  # oxirgi N ta xabar
@@ -356,32 +365,41 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     log.error("Handlerda xatolik", exc_info=context.error)
 
 
-async def start_dummy_server() -> None:
-    port = os.getenv("PORT")
-    if not port:
+def start_dummy_server() -> None:
+    port_str = os.getenv("PORT")
+    if not port_str:
         return
-    async def handle_ping(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        try:
-            await reader.read(1024)
-            response = (
-                b"HTTP/1.1 200 OK\r\n"
-                b"Content-Type: text/plain\r\n"
-                b"Content-Length: 5\r\n\r\nOK v3"
-            )
-            writer.write(response)
-            await writer.drain()
-        except Exception:
+    try:
+        port = int(port_str)
+    except ValueError:
+        log.warning("PORT noto'g'ri formatda: %s", port_str)
+        return
+
+    class PingHandler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", "2")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(b"OK")
+
+        def do_HEAD(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", "2")
+            self.send_header("Connection", "close")
+            self.end_headers()
+
+        def log_message(self, format, *args):
+            # Health check loglarini asosiy loglarga chiqarmaslik uchun
             pass
-        finally:
-            writer.close()
-            try:
-                await writer.wait_closed()
-            except Exception:
-                pass
 
     try:
-        await asyncio.start_server(handle_ping, "0.0.0.0", int(port))
-        log.info("Render Web Service uchun port ochildi: %s", port)
+        server = http.server.ThreadingHTTPServer(("0.0.0.0", port), PingHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        log.info("Render Web Service uchun port ochildi (0.0.0.0:%s)", port)
     except Exception as e:
         log.warning("Port serverini ishga tushirishda xatolik: %s", e)
 
@@ -411,11 +429,11 @@ async def post_init(app: Application) -> None:
             BotCommand("help", "Yordam"),
         ]
     )
-    await start_dummy_server()
     asyncio.create_task(keep_alive_task())
 
 
 def main() -> None:
+    start_dummy_server()
     request = HTTPXRequest(
         connect_timeout=30.0,
         read_timeout=30.0,

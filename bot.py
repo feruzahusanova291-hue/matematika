@@ -210,6 +210,14 @@ def trim_history(history: list[types.Content]) -> None:
         history.pop(0)
 
 
+def cleanup_old_image_parts(history: list[types.Content]) -> None:
+    """Xotira (RAM) to'lib ketmasligi uchun tarixdagi eski rasmlar baytlarini bo'shatamiz."""
+    for content in history[:-1]:
+        for idx, part in enumerate(content.parts):
+            if getattr(part, "inline_data", None) is not None:
+                content.parts[idx] = types.Part.from_text(text="[Oldingi yuborilgan masala rasmi]")
+
+
 async def ask_gemini(user_id: int, parts: list[types.Part]) -> str:
     history = histories[user_id]
     history.append(types.Content(role="user", parts=parts))
@@ -229,6 +237,7 @@ async def ask_gemini(user_id: int, parts: list[types.Part]) -> str:
             if text:
                 history.append(types.Content(role="model", parts=[types.Part.from_text(text=text)]))
                 trim_history(history)
+                cleanup_old_image_parts(history)
                 return text
         except Exception as e:
             last_error = e
@@ -432,8 +441,7 @@ async def post_init(app: Application) -> None:
     asyncio.create_task(keep_alive_task())
 
 
-def main() -> None:
-    start_dummy_server()
+def create_app() -> Application:
     request = HTTPXRequest(
         connect_timeout=30.0,
         read_timeout=30.0,
@@ -461,13 +469,27 @@ def main() -> None:
         MessageHandler(~filters.COMMAND & ~filters.TEXT & ~filters.PHOTO, on_other)
     )
     app.add_error_handler(on_error)
+    return app
 
-    log.info("Bot ishga tushdi. Model: %s", MODEL)
-    app.run_polling(
-        allowed_updates=Update.ALL_TYPES,
-        bootstrap_retries=5,
-        timeout=20,
-    )
+
+def main() -> None:
+    start_dummy_server()
+    log.info("Bot tizimi ishga tushirildi. Model: %s", MODEL)
+
+    while True:
+        try:
+            app = create_app()
+            app.run_polling(
+                allowed_updates=Update.ALL_TYPES,
+                bootstrap_retries=-1,
+                timeout=20,
+            )
+        except (KeyboardInterrupt, SystemExit):
+            log.info("Bot to'xtatildi.")
+            break
+        except Exception as e:
+            log.exception("Polling to'xtab qoldi (%s). 5 soniyadan so'ng qayta ulanadi...", e)
+            time.sleep(5)
 
 
 if __name__ == "__main__":
